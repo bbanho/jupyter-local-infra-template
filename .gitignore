@@ -1,0 +1,83 @@
+# =============================================================================
+# JUPYTER LOCAL INFRA — Git Ignore
+# =============================================================================
+# Secrets & Environment
+.env
+.env.local
+*.pem
+*.key
+*.crt
+
+# Python & Build
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb.meta
+.jupyter/
+*.ipynb_output
+
+# Data & Models (large files - use DVC/Git LFS if needed)
+data/
+!data/.gitkeep
+models/
+!models/.gitkeep
+cache/
+!cache/.gitkeep
+logs/
+!logs/.gitkeep
+mlruns/
+wandb/
+
+# Ollama
+ollama-data/
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Host repo (mounted read-only, not part of this repo)
+HOST_REPO/
+
+# Backups
+backups/
+*.tar.gz
+*.backup
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# VS Code / Cursor
+.vscode/settings.json
+.vscode/launch.json
+
+# Coverage & Reports
+coverage.xml
+*.lcov
+
+# Sync tracking
+.sync/

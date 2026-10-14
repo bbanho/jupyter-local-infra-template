@@ -1,0 +1,165 @@
+version: "3.8"
+
+# =============================================================================
+# JUPYTER LOCAL INFRA — ML Development Stack Template
+# =============================================================================
+# Purpose: Local JupyterLab + Ollama + MCP Proxy for ML experimentation
+#          and long-running GPU workloads (LoRA training, graph experiments).
+#
+# Usage:
+#   1. cp .env.example .env && edit .env
+#   2. docker compose -f infra/docker-compose.jupyter.yaml up -d
+#   3. JupyterLab: http://localhost:${JUPYTER_PORT:-8888}  (token: ${JUPYTER_TOKEN})
+#   4. Ollama:     http://localhost:${OLLAMA_PORT:-11434}
+#   5. MCP Proxy:  http://localhost:${MCP_PROXY_PORT:-7475}  (proxies host :${MCP_HOST_PORT:-7474})
+#
+# Colab Connection:
+#   Colab UI → "Conectar ao ambiente de execução local" → http://localhost:${JUPYTER_PORT:-8888}/?token=${JUPYTER_TOKEN}
+#
+# Volumes (persisted):
+#   ./notebooks  → /home/jovyan/work/notebooks   (versioned .ipynb)
+#   ./data       → /home/jovyan/work/data        (CSVs, embeddings, exports)
+#   ./models     → /home/jovyan/work/models      (LoRA adapters, checkpoints)
+#   ./cache      → /cache                       (pip, uv, HF cache)
+#   Host repo    → /home/jovyan/work/HOST_REPO:ro (read-only access to source)
+#
+# GPU: Requires NVIDIA Container Toolkit (nvidia-smi works inside)
+# =============================================================================
+
+services:
+  # -----------------------------------------------------------------------------
+  # JUPYTERLAB — Main development environment
+  # -----------------------------------------------------------------------------
+  jupyter:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile.jupyter
+      args:
+        BASE_IMAGE: nvidia/cuda:12.4.1-devel-ubuntu22.04
+        PYTHON_VERSION: 3.11
+    container_name: ${PROJECT_NAME:-ml-project}-jupyter
+    runtime: nvidia
+    environment:
+      - JUPYTER_TOKEN=${JUPYTER_TOKEN:-change-me}
+      - JUPYTER_LAB_ENABLE=1
+      - UV_CACHE_DIR=/cache/uv
+      - PIP_CACHE_DIR=/cache/pip
+      - HF_HOME=/cache/huggingface
+      - TRANSFORMERS_CACHE=/cache/huggingface
+      - TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;8.9;9.0"  # Ampere+ (RTX 30/40 series)
+      - MCP_PROXY_URL=http://mcp-proxy:${MCP_PROXY_PORT:-7475}
+      - OLLAMA_HOST=http://ollama:${OLLAMA_PORT:-11434}
+      - GIT_USER_NAME=${GIT_USER_NAME:-User}
+      - GIT_USER_EMAIL=${GIT_USER_EMAIL:-user@example.com}
+    volumes:
+      - ./notebooks:/home/jovyan/work/notebooks
+      - ./data:/home/jovyan/work/data
+      - ./models:/home/jovyan/work/models
+      - ./cache:/cache
+      - ${HOST_REPO_PATH:-/var/home/bruno/repos/YOUR_REPO}:/home/jovyan/work/HOST_REPO:ro
+      - ${HOST_HF_CACHE:-/var/home/bruno/.cache/huggingface}:/cache/huggingface
+    ports:
+      - "${JUPYTER_PORT:-8888}:8888"   # JupyterLab
+      - "8765:8765"                    # MCP server (if running inside)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      - ollama
+      - mcp-proxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/api"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # -----------------------------------------------------------------------------
+  # OLLAMA — Local LLM/Embedding server
+  # -----------------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ${PROJECT_NAME:-ml-project}-ollama
+    runtime: nvidia
+    environment:
+      - OLLAMA_HOST=0.0.0.0:${OLLAMA_PORT:-11434}
+      - OLLAMA_ORIGINS=*
+      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_MAX_LOADED_MODELS=3
+    volumes:
+      - ollama-data:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:${OLLAMA_PORT:-11434}"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${OLLAMA_PORT:-11434}/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # -----------------------------------------------------------------------------
+  # MCP PROXY — Exposes host MCP to containers
+  # -----------------------------------------------------------------------------
+  mcp-proxy:
+    image: alpine/socat:latest
+    container_name: ${PROJECT_NAME:-ml-project}-mcp-proxy
+    network_mode: host
+    command: >
+      TCP-LISTEN:${MCP_PROXY_PORT:-7475},fork,reuseaddr
+      TCP:127.0.0.1:${MCP_HOST_PORT:-7474}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "${MCP_PROXY_PORT:-7475}"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # -----------------------------------------------------------------------------
+  # CODE-SERVER (Optional) — VS Code in browser
+  # -----------------------------------------------------------------------------
+  code-server:
+    image: codercom/code-server:latest
+    container_name: ${PROJECT_NAME:-ml-project}-code
+    runtime: nvidia
+    environment:
+      - PASSWORD=${CODE_SERVER_PASSWORD:-change-me}
+      - SUDO_PASSWORD=${CODE_SERVER_PASSWORD:-change-me}
+    volumes:
+      - ./notebooks:/home/coder/work/notebooks
+      - ./data:/home/coder/work/data
+      - ./models:/home/coder/work/models
+      - ${HOST_REPO_PATH:-/var/home/bruno/repos/YOUR_REPO}:/home/coder/work/HOST_REPO:ro
+    ports:
+      - "${CODE_SERVER_PORT:-8080}:8080"
+    command: --auth password --bind-addr 0.0.0.0:8080
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - code-server
+
+volumes:
+  ollama-data:
+
+networks:
+  default:
+    name: ${PROJECT_NAME:-ml-project}-net
+    driver: bridge
